@@ -1,15 +1,18 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
+import React, { useEffect, useState } from 'react';
+import { Alert, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import MapView, { Marker, Polyline } from 'react-native-maps';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 export default function ConductorScreen() {
   // Datos del conductor y ruta
   const [conductor, setConductor] = useState<any>(null);
   const [patente, setPatente] = useState('');
   const [ruta, setRuta] = useState('');
+  
+  // Puntos del Mapa (Alumnos + Colegio final)
+  const [puntosMapa, setPuntosMapa] = useState<any[]>([]);
+  const [destinoFinal, setDestinoFinal] = useState<string>('');
 
   // Estados del viaje
   const [viajeIniciado, setViajeIniciado] = useState(false);
@@ -19,7 +22,7 @@ export default function ConductorScreen() {
   const [inicioViaje, setInicioViaje] = useState<number | null>(null);
 
   // ---------------------------
-  // 👉 Cargar conductor según correo de login
+  // 1. Cargar Datos (Lógica Robusta)
   // ---------------------------
   useEffect(() => {
     const cargarDatos = async () => {
@@ -27,19 +30,85 @@ export default function ConductorScreen() {
         const json = await AsyncStorage.getItem('colegioData');
         const correoLogin = await AsyncStorage.getItem('usuario');
 
-        if (!json || !correoLogin) return;
+        if (!json || !correoLogin) {
+            console.log("Faltan datos de login o base de datos");
+            return;
+        }
+
         const data = JSON.parse(json);
+        const todosLosAlumnos = data.alumnos || [];
+        const colegios = data.colegios || [];
 
-        // Filtramos el conductor según correo
-        const conductorData = data.conductores.find((c: any) => c.correo === correoLogin);
-        if (conductorData) setConductor(conductorData);
+        // A. Identificar Conductor (Comparación segura de strings)
+        const conductorData = data.conductores.find(
+            (c: any) => c.correo.trim().toLowerCase() === correoLogin.trim().toLowerCase()
+        );
 
-        // Patente → primer bus registrado
+        if (conductorData) {
+            setConductor(conductorData);
+        } else {
+            setRuta("Error: Conductor no encontrado");
+            return;
+        }
+
+        // B. Asignar Patente
         if (data.buses.length > 0) setPatente(data.buses[0]);
 
-        // Ruta → generar según alumnos
-        if (data.alumnos.length > 0) setRuta(`Recorrido con ${data.alumnos.length} alumnos`);
-        else setRuta("Ruta no definida");
+        // C. FILTRADO INTELIGENTE DE RUTA
+        const comunaAsignada = conductorData?.comunaAsignada || ""; // Puede venir vacío si es dato antiguo
+        let alumnosFiltrados: any[] = [];
+
+        if (comunaAsignada && comunaAsignada.length > 0) {
+            // Caso 1: Tiene comuna asignada -> Filtramos
+            alumnosFiltrados = todosLosAlumnos.filter((a: any) => 
+                a.comuna && a.comuna.trim().toLowerCase() === comunaAsignada.trim().toLowerCase()
+            );
+        } else {
+            // Caso 2: NO tiene comuna asignada -> Mostramos TODOS (Fallback)
+            console.log("⚠️ Conductor sin comuna específica. Cargando ruta general.");
+            alumnosFiltrados = todosLosAlumnos;
+        }
+
+        // D. Generar Puntos del Mapa
+        if (alumnosFiltrados.length > 0) {
+          const nombreRuta = comunaAsignada 
+            ? `Ruta ${comunaAsignada}` 
+            : "Ruta General (Todas las comunas)";
+            
+          setRuta(`${nombreRuta} - ${alumnosFiltrados.length} alumnos`);
+          
+          // Generar coordenadas (Simuladas si no existen)
+          const alumnosConCoords = alumnosFiltrados.map((a: any) => ({
+            ...a,
+            // Si ya tiene lat/lng las usa, si no, genera un random cerca de stgo centro
+            lat: a.lat ?? (-33.45 + Math.random() * 0.06), 
+            lng: a.lng ?? (-70.65 + Math.random() * 0.06),
+            tipo: 'ALUMNO'
+          }));
+
+          let rutaCompleta = [...alumnosConCoords];
+
+          // Agregar Colegio al Final
+          if (colegios.length > 0) {
+            const sede = colegios[0];
+            setDestinoFinal(sede.nombre);
+            
+            const colegioConCoords = {
+              ...sede,
+              lat: sede.lat ?? -33.43,
+              lng: sede.lng ?? -70.63,
+              tipo: 'COLEGIO'
+            };
+            rutaCompleta.push(colegioConCoords);
+          }
+
+          setPuntosMapa(rutaCompleta);
+
+        } else {
+            // Caso 3: Tiene comuna asignada pero 0 alumnos en ella
+            setRuta(`Sin alumnos registrados en ${comunaAsignada}`);
+            setPuntosMapa([]); 
+        }
 
       } catch (e) {
         console.log("Error cargando colegioData:", e);
@@ -49,7 +118,7 @@ export default function ConductorScreen() {
   }, []);
 
   // ---------------------------
-  // Cargar viaje activo (timer)
+  // Cargar y gestionar Timer
   // ---------------------------
   useEffect(() => {
     const cargarViaje = async () => {
@@ -64,7 +133,6 @@ export default function ConductorScreen() {
     cargarViaje();
   }, []);
 
-  // Temporizador en vivo
   useEffect(() => {
     let interval: any;
     if (viajeIniciado && inicioViaje) {
@@ -76,7 +144,7 @@ export default function ConductorScreen() {
   }, [viajeIniciado, inicioViaje]);
 
   // ---------------------------
-  // Cargar reportes del conductor actual
+  // Cargar Reportes
   // ---------------------------
   useEffect(() => {
     const cargarReportes = async () => {
@@ -86,9 +154,7 @@ export default function ConductorScreen() {
         if (conductor) {
           setReportes(data.filter((r: any) => r.conductor === conductor.nombre));
         }
-      } catch (error) {
-        console.log('Error leyendo reportes:', error);
-      }
+      } catch (error) { console.log(error); }
     };
     cargarReportes();
   }, [conductor]);
@@ -100,6 +166,7 @@ export default function ConductorScreen() {
     return `${h}:${m}:${s}`;
   };
 
+  // Funciones de Viaje y Reporte
   const iniciarViaje = async () => {
     if (viajeIniciado) return;
     const ahora = Date.now();
@@ -110,7 +177,7 @@ export default function ConductorScreen() {
 
   const finalizarViaje = async () => {
     if (!viajeIniciado) return;
-    Alert.alert('Finalizar viaje', '¿Estás seguro que quieres finalizar el viaje?', [
+    Alert.alert('Finalizar viaje', '¿Has llegado al colegio y finalizado la ruta?', [
       { text: 'Cancelar', style: 'cancel' },
       {
         text: 'Finalizar',
@@ -133,9 +200,7 @@ export default function ConductorScreen() {
       const nuevos = [...all, reporte];
       setReportes(prev => [...prev, reporte]);
       await AsyncStorage.setItem('reportes', JSON.stringify(nuevos));
-    } catch (error) {
-      console.log('Error guardando reporte:', error);
-    }
+    } catch (error) { console.log(error); }
   };
 
   const reportarEvento = (evento: string) => {
@@ -143,7 +208,6 @@ export default function ConductorScreen() {
       Alert.alert('Viaje no iniciado', 'Debes iniciar el viaje antes de reportar.');
       return;
     }
-
     Alert.alert(`Reportar ${evento}`, '¿Confirmar reporte?', [
       { text: 'Cancelar', style: 'cancel' },
       {
@@ -165,94 +229,99 @@ export default function ConductorScreen() {
     ]);
   };
 
-  const eliminarReporte = (index: number) => {
-    Alert.alert('Eliminar reporte', '¿Seguro que quieres eliminarlo?', [
-      { text: 'Cancelar', style: 'cancel' },
-      {
-        text: 'Eliminar',
-        style: 'destructive',
-        onPress: async () => {
-          const json = await AsyncStorage.getItem('reportes');
-          const all = json ? JSON.parse(json) : [];
-          all.splice(index, 1);
-          await AsyncStorage.setItem('reportes', JSON.stringify(all));
-          setReportes(all.filter((r: any) => r.conductor === conductor?.nombre));
-        },
-      },
-    ]);
+  const eliminarReporte = async (index: number) => {
+      const json = await AsyncStorage.getItem('reportes');
+      const all = json ? JSON.parse(json) : [];
+      all.splice(index, 1);
+      await AsyncStorage.setItem('reportes', JSON.stringify(all));
+      setReportes(all.filter((r: any) => r.conductor === conductor?.nombre));
   };
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: '#f4f6fc' }}>
-      <KeyboardAwareScrollView
-        contentContainerStyle={styles.container}
-        enableOnAndroid
-        extraScrollHeight={200}
-        enableAutomaticScroll
-      >
-        {/* Info conductor */}
+      <ScrollView contentContainerStyle={styles.container}>
+        
+        {/* Tarjeta Info Conductor */}
         <View style={styles.card}>
-          <Text style={styles.titulo}>Conductor</Text>
-          <Text style={styles.subtitulo}>{conductor ? conductor.nombre : "Cargando..."}</Text>
-          <Text style={styles.subtitulo}>Ruta: {ruta}</Text>
+          <Text style={styles.titulo}>Panel Conductor</Text>
+          <Text style={styles.subtitulo}>Hola, {conductor ? conductor.nombre : "Cargando..."}</Text>
+          
+          <Text style={[styles.subtitulo, { color: '#555', fontStyle: 'italic' }]}>
+             {conductor?.comunaAsignada 
+                ? `Zona Asignada: ${conductor.comunaAsignada}` 
+                : "Zona: General (Sin asignar)"}
+          </Text>
+
           <Text style={styles.subtitulo}>Patente: {patente || "Sin asignar"}</Text>
+          {destinoFinal ? <Text style={[styles.subtitulo, {color: '#4f46e5', fontWeight:'bold'}]}>Destino: {destinoFinal}</Text> : null}
 
           <TouchableOpacity
-            style={[styles.button, viajeIniciado && styles.buttonDisabled]}
+            style={[styles.button, (viajeIniciado || puntosMapa.length === 0) && styles.buttonDisabled]}
             onPress={iniciarViaje}
-            disabled={viajeIniciado}
+            disabled={viajeIniciado || puntosMapa.length === 0}
           >
             <Text style={styles.buttonText}>
-              {viajeIniciado ? 'Viaje en curso' : 'Iniciar viaje'}
+                {puntosMapa.length === 0 ? 'Cargando Ruta...' : (viajeIniciado ? 'Ruta en Curso' : 'Iniciar Ruta al Colegio')}
             </Text>
           </TouchableOpacity>
 
           {viajeIniciado && (
-            <TouchableOpacity
-              style={[styles.button, { backgroundColor: '#e11d48' }]}
-              onPress={finalizarViaje}
-            >
-              <Text style={styles.buttonText}>Finalizar viaje</Text>
-            </TouchableOpacity>
+            <View>
+              <Text style={styles.temporizador}>Tiempo: {formatTiempo(tiempo)}</Text>
+              <TouchableOpacity style={[styles.button, { backgroundColor: '#e11d48', marginTop: 10 }]} onPress={finalizarViaje}>
+                <Text style={styles.buttonText}>Llegada al Colegio (Finalizar)</Text>
+              </TouchableOpacity>
+            </View>
           )}
-
-          {viajeIniciado && <Text style={styles.temporizador}>Tiempo: {formatTiempo(tiempo)}</Text>}
         </View>
         
-      {ruta && (
-        <View style={{ marginVertical: 16, borderRadius: 16, overflow: 'hidden', height: 250 }}>
-          <MapView
-            style={{ flex: 1 }}
-            initialRegion={{
-              latitude: -33.45,
-              longitude: -70.65,
-              latitudeDelta: 0.05,
-              longitudeDelta: 0.05,
-            }}
-          >
-            {/* Marcadores de ejemplo */}
-            <Marker coordinate={{ latitude: -33.45, longitude: -70.65 }} title="Inicio" />
-            <Marker coordinate={{ latitude: -33.44, longitude: -70.66 }} title="Punto intermedio" />
-            <Marker coordinate={{ latitude: -33.43, longitude: -70.67 }} title="Destino" />
+        {/* MAPA DINÁMICO */}
+        {puntosMapa.length > 0 ? (
+          <View style={styles.mapCard}>
+            <Text style={styles.mapTitle}>{ruta}</Text>
+            <MapView
+              style={{ flex: 1, width: '100%', height: 300 }}
+              initialRegion={{
+                latitude: -33.44, 
+                longitude: -70.64,
+                latitudeDelta: 0.08,
+                longitudeDelta: 0.08,
+              }}
+            >
+              {puntosMapa.map((punto, index) => (
+                <Marker
+                  key={index}
+                  coordinate={{ latitude: punto.lat, longitude: punto.lng }}
+                  title={punto.tipo === 'COLEGIO' ? `🏫 ${punto.nombre}` : `🧒 ${punto.nombre}`}
+                  description={punto.direccion}
+                  pinColor={punto.tipo === 'COLEGIO' ? 'blue' : 'red'} 
+                />
+              ))}
 
-            {/* Polyline conectando los puntos */}
-            <Polyline
-              coordinates={[
-                { latitude: -33.45, longitude: -70.65 },
-                { latitude: -33.44, longitude: -70.66 },
-                { latitude: -33.43, longitude: -70.67 },
-              ]}
-              strokeColor="#4CAF50"
-              strokeWidth={4}
-            />
-          </MapView>
-        </View>
-      )}
+              <Polyline
+                coordinates={puntosMapa.map(p => ({ latitude: p.lat, longitude: p.lng }))}
+                strokeColor="#4CAF50"
+                strokeWidth={4}
+              />
+            </MapView>
+            <Text style={{textAlign:'center', fontSize: 12, color: '#666', marginTop: 5}}>
+              🔴 Alumnos  ➔  🔵 Colegio
+            </Text>
+          </View>
+        ) : (
+            <View style={[styles.card, { alignItems: 'center', padding: 30 }]}>
+                <Text style={{ color: '#888' }}>No hay ruta disponible.</Text>
+                <Text style={{ color: '#aaa', fontSize: 12, textAlign: 'center', marginTop: 5 }}>
+                    Verifica que existan alumnos en tu comuna asignada.
+                </Text>
+            </View>
+        )}
 
-        {/* Detalle reporte */}
+        {/* Panel de Reportes */}
         <View style={styles.card}>
+          <Text style={styles.titulo}>Reportar Incidencia</Text>
           <TextInput
-            placeholder="Detalle opcional..."
+            placeholder="Detalle opcional (ej: tráfico pesado)"
             value={detalleReporte}
             onChangeText={setDetalleReporte}
             style={styles.input}
@@ -260,66 +329,62 @@ export default function ConductorScreen() {
           />
 
           <View style={styles.rowBotones}>
-            <TouchableOpacity
-              style={[styles.buttonEvento, { backgroundColor: '#FFA500' }]}
-              onPress={() => reportarEvento('Retraso')}
-            >
+            <TouchableOpacity style={[styles.buttonEvento, { backgroundColor: '#FFA500' }]} onPress={() => reportarEvento('Retraso')}>
               <Text style={styles.buttonText}>Retraso</Text>
             </TouchableOpacity>
-
-            <TouchableOpacity
-              style={[styles.buttonEvento, { backgroundColor: '#FF4500' }]}
-              onPress={() => reportarEvento('Ausencia')}
-            >
+            <TouchableOpacity style={[styles.buttonEvento, { backgroundColor: '#FF4500' }]} onPress={() => reportarEvento('Ausencia')}>
               <Text style={styles.buttonText}>Ausencia</Text>
             </TouchableOpacity>
-
-            <TouchableOpacity
-              style={[styles.buttonEvento, { backgroundColor: '#FF0000' }]}
-              onPress={() => reportarEvento('Accidente')}
-            >
+            <TouchableOpacity style={[styles.buttonEvento, { backgroundColor: '#FF0000' }]} onPress={() => reportarEvento('Accidente')}>
               <Text style={styles.buttonText}>Accidente</Text>
             </TouchableOpacity>
           </View>
         </View>
 
-        {/* Reportes */}
+        {/* Historial de Reportes */}
         <View style={styles.card}>
-          <Text style={styles.titulo}>Reportes guardados</Text>
+          <Text style={styles.titulo}>Historial del Viaje</Text>
           {reportes.length === 0 ? (
-            <Text style={{ textAlign: 'center', color: '#666' }}>No hay reportes todavía</Text>
+            <Text style={{ textAlign: 'center', color: '#666' }}>Sin incidentes reportados.</Text>
           ) : (
             reportes.map((r, i) => (
               <View key={i} style={styles.reporteCard}>
-                <Text style={styles.reporteText}>{r.tiempo} - {r.evento}</Text>
-                <Text style={styles.reporteDetalle}>Detalle: {r.detalle}</Text>
-                <Text style={styles.reporteDetalle}>Patente: {r.patente}</Text>
+                <View style={{flexDirection:'row', justifyContent:'space-between'}}>
+                    <Text style={styles.reporteText}>{r.evento}</Text>
+                    <Text style={{color:'#666'}}>{r.tiempo}</Text>
+                </View>
+                <Text style={styles.reporteDetalle}>{r.detalle}</Text>
                 <TouchableOpacity onPress={() => eliminarReporte(i)}>
-                  <Text style={styles.eliminar}>Eliminar</Text>
+                  <Text style={styles.eliminar}>Deshacer</Text>
                 </TouchableOpacity>
               </View>
             ))
           )}
         </View>
-      </KeyboardAwareScrollView>
+
+      </ScrollView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { padding: 16 },
-  card: { backgroundColor: '#fff', borderRadius: 16, padding: 20, marginBottom: 20, shadowColor: '#000', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.1, shadowRadius: 12, elevation: 8 },
+  container: { padding: 16, paddingBottom: 40 },
+  card: { backgroundColor: '#fff', borderRadius: 16, padding: 20, marginBottom: 20, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.1, shadowRadius: 8, elevation: 5 },
   titulo: { fontSize: 20, fontWeight: 'bold', marginBottom: 10, textAlign: 'center', color: '#333' },
   subtitulo: { fontSize: 16, marginBottom: 4, textAlign: 'center', color: '#555' },
-  temporizador: { fontSize: 18, marginTop: 12, textAlign: 'center', fontWeight: 'bold', color: '#333' },
+  temporizador: { fontSize: 24, marginTop: 12, textAlign: 'center', fontWeight: 'bold', color: '#333' },
   input: { borderWidth: 1, borderColor: '#ddd', borderRadius: 12, padding: 14, fontSize: 16, backgroundColor: '#f9f9f9', marginBottom: 12 },
   button: { width: '100%', paddingVertical: 14, borderRadius: 12, alignItems: 'center', marginTop: 12, backgroundColor: '#4f46e5' },
   buttonDisabled: { backgroundColor: '#999' },
   buttonText: { color: '#fff', fontWeight: 'bold', fontSize: 16 },
   rowBotones: { flexDirection: 'row', justifyContent: 'space-between', gap: 10, marginTop: 12 },
   buttonEvento: { flex: 1, paddingVertical: 14, borderRadius: 12, alignItems: 'center' },
-  reporteCard: { borderWidth: 1, borderColor: '#ddd', borderRadius: 12, padding: 12, marginTop: 12, backgroundColor: '#f9f9f9' },
-  reporteText: { fontWeight: 'bold', fontSize: 16, marginBottom: 4 },
-  reporteDetalle: { fontSize: 14, color: '#555' },
-  eliminar: { color: '#e60000', fontWeight: 'bold', marginTop: 6, textAlign: 'right' },
+  reporteCard: { borderLeftWidth: 4, borderLeftColor: '#4f46e5', borderRadius: 8, padding: 12, marginTop: 10, backgroundColor: '#f4f4f5' },
+  reporteText: { fontWeight: 'bold', fontSize: 16 },
+  reporteDetalle: { fontSize: 14, color: '#555', marginTop: 4 },
+  eliminar: { color: '#e60000', fontWeight: 'bold', marginTop: 8, textAlign: 'right', fontSize: 12 },
+  
+  // Estilos del Mapa
+  mapCard: { height: 350, borderRadius: 16, overflow: 'hidden', marginBottom: 20, elevation: 5, backgroundColor: '#fff' },
+  mapTitle: { textAlign: 'center', fontWeight: 'bold', padding: 8, backgroundColor: '#fff' }
 });

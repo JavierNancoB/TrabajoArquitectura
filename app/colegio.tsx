@@ -18,10 +18,11 @@ import { BarChart, PieChart } from 'react-native-chart-kit';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
 
 // ---------------------------
-// Interfaces
+// Interfaces Actualizadas
 // ---------------------------
 interface Alumno { nombre: string; comuna: string; direccion: string; correoApoderado: string; }
-interface Conductor { nombre: string; correo: string; }
+// NUEVO: Agregamos comunaAsignada al conductor
+interface Conductor { nombre: string; correo: string; comunaAsignada?: string; } 
 interface ColegioSede { nombre: string; comuna: string; direccion: string; }
 
 interface ColegioData {
@@ -52,14 +53,18 @@ export default function ColegioScreen() {
   // ---------------------------
   // Bus
   const [nuevoBus, setNuevoBus] = useState('');
-  // Conductor
+  
+  // Conductor (CON NUEVO CAMPO COMUNA)
   const [nuevoConductor, setNuevoConductor] = useState('');
   const [nuevoCorreoConductor, setNuevoCorreoConductor] = useState('');
+  const [nuevoComunaConductor, setNuevoComunaConductor] = useState(''); 
+
   // Alumno
   const [nuevoNombre, setNuevoNombre] = useState('');
   const [nuevaComuna, setNuevaComuna] = useState('');
   const [nuevaDireccion, setNuevaDireccion] = useState('');
   const [nuevoCorreo, setNuevoCorreo] = useState('');
+  
   // Colegio
   const [colNombre, setColNombre] = useState('');
   const [colComuna, setColComuna] = useState('');
@@ -79,7 +84,7 @@ export default function ColegioScreen() {
   const [showBuses, setShowBuses] = useState(false);
   const [showConductores, setShowConductores] = useState(false);
   const [showAlumnos, setShowAlumnos] = useState(false);
-  const [showColegios, setShowColegios] = useState(true); // Abierto por defecto para verlo fácil
+  const [showColegios, setShowColegios] = useState(true);
 
   // ---------------------------
   // ESTADOS: DASHBOARD REAL
@@ -192,18 +197,33 @@ export default function ColegioScreen() {
     const n = buses.filter((_, x) => x !== i); setBuses(n); guardarDatos({ buses: n, conductores, alumnos, colegios });
   };
 
-  // --- CONDUCTORES ---
+  // --- CONDUCTORES (MODIFICADO PARA INCLUIR COMUNA) ---
   const handleGuardarConductor = () => {
-    if (!nuevoConductor || !nuevoCorreoConductor) return;
-    const obj = { nombre: nuevoConductor, correo: nuevoCorreoConductor };
+    if (!nuevoConductor || !nuevoCorreoConductor) {
+        alert("El nombre y el correo son obligatorios");
+        return;
+    }
+    const obj = { 
+        nombre: nuevoConductor, 
+        correo: nuevoCorreoConductor,
+        comunaAsignada: nuevoComunaConductor // Guardar Comuna
+    };
     let nuevos = [...conductores];
     if (editIndexConductor >= 0) { nuevos[editIndexConductor] = obj; setEditIndexConductor(-1); }
     else { nuevos.push(obj); }
-    setConductores(nuevos); guardarDatos({ buses, conductores: nuevos, alumnos, colegios }); setNuevoConductor(''); setNuevoCorreoConductor('');
+    setConductores(nuevos); guardarDatos({ buses, conductores: nuevos, alumnos, colegios }); 
+    setNuevoConductor(''); setNuevoCorreoConductor(''); setNuevoComunaConductor('');
   };
+  
   const editarConductor = (i: number) => {
-    const c = conductores[i]; setNuevoConductor(c.nombre); setNuevoCorreoConductor(c.correo); setEditIndexConductor(i); refConductor.current?.focus();
+    const c = conductores[i]; 
+    setNuevoConductor(c.nombre); 
+    setNuevoCorreoConductor(c.correo); 
+    setNuevoComunaConductor(c.comunaAsignada || ''); // Cargar comuna al editar
+    setEditIndexConductor(i); 
+    refConductor.current?.focus();
   };
+  
   const eliminarConductor = (i: number) => {
     const n = conductores.filter((_, x) => x !== i); setConductores(n); guardarDatos({ buses, conductores: n, alumnos, colegios });
   };
@@ -237,8 +257,14 @@ export default function ColegioScreen() {
       <View key={i} style={styles.cardItem}>
         <View style={{ flex: 1 }}>
           <Text style={styles.itemTitle}>{item.nombre || item}</Text>
+          {/* Detalles específicos según tipo */}
           {item.direccion && <Text style={styles.itemSubtitle}>{item.comuna} - {item.direccion}</Text>}
           {item.correo && <Text style={styles.itemSubtitle}>{item.correo}</Text>}
+          {tipo === 'conductor' && (
+            <Text style={[styles.itemSubtitle, { color: '#4CAF50', fontWeight: 'bold' }]}>
+                Ruta Asignada: {item.comunaAsignada || "General"}
+            </Text>
+          )}
         </View>
         <View style={styles.actionButtons}>
           <TouchableOpacity onPress={() => editarFn(i)} style={styles.editBtn}><Text style={styles.editText}>Editar</Text></TouchableOpacity>
@@ -355,7 +381,7 @@ export default function ColegioScreen() {
         </View>
       )}
 
-      {/* 3. CONDUCTORES */}
+      {/* 3. CONDUCTORES (MODIFICADO) */}
       <TouchableOpacity style={styles.accordionHeader} onPress={() => { LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut); setShowConductores(!showConductores); }}>
         <Text style={styles.accordionTitle}>👨‍✈️ Conductores ({conductores.length})</Text>
         <Text>{showConductores ? '▲' : '▼'}</Text>
@@ -364,9 +390,18 @@ export default function ColegioScreen() {
         <View style={[styles.accordionContent, editIndexConductor >= 0 && styles.editingBackground]}>
           <TextInput ref={refConductor} placeholder="Nombre" value={nuevoConductor} onChangeText={setNuevoConductor} style={styles.input} />
           <TextInput placeholder="Correo Login" value={nuevoCorreoConductor} onChangeText={setNuevoCorreoConductor} style={styles.input} keyboardType="email-address" />
+          
+          {/* CAMPO DE COMUNA */}
+          <TextInput 
+            placeholder="Comuna Asignada (Ej: Las Condes)" 
+            value={nuevoComunaConductor} 
+            onChangeText={setNuevoComunaConductor} 
+            style={[styles.input, { borderColor: '#4CAF50', borderWidth: 2 }]} 
+          />
+          
           <View style={styles.rowBotonesInput}>
             <Button title={editIndexConductor >= 0 ? "Actualizar" : "Agregar"} onPress={handleGuardarConductor} color={editIndexConductor >= 0 ? "#FFA500" : "#2196F3"} />
-            {editIndexConductor >= 0 && <Button title="Cancelar" onPress={() => {setNuevoConductor(''); setNuevoCorreoConductor(''); setEditIndexConductor(-1)}} color="#757575" />}
+            {editIndexConductor >= 0 && <Button title="Cancelar" onPress={() => {setNuevoConductor(''); setNuevoCorreoConductor(''); setNuevoComunaConductor(''); setEditIndexConductor(-1)}} color="#757575" />}
           </View>
           {renderItem(conductores, eliminarConductor, editarConductor, "conductor")}
         </View>
